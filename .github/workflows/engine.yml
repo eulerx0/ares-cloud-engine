@@ -1,0 +1,88 @@
+name: Ares Cloud Beast Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Wakeup trigger reason'
+        required: false
+        default: 'cli-wakeup'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  beast-node:
+    name: ⚡ Ares Cloud Media Beast (4 vCPU / 16GB RAM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: 📥 Checkout Engine Code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install Node Dependencies
+        run: npm install
+
+      - name: ⚡ Restore Whisper.cpp & AI Model Cache
+        id: cache-whisper
+        uses: actions/cache@v4
+        with:
+          path: /tmp/whisper-bin
+          key: ares-whisper-cpp-small-v1
+
+      - name: 🛠️ Install FFmpeg, yt-dlp & Whisper Engine
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg cmake build-essential curl ca-certificates fonts-noto-core fonts-noto-color-emoji fonts-dejavu-core
+
+          # Install latest yt-dlp binary
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          yt-dlp --version
+
+          # Build whisper.cpp and download ggml-small.bin if not cached
+          mkdir -p /tmp/whisper-bin
+          if [ ! -f "/tmp/whisper-bin/whisper-cli" ]; then
+            echo "🔨 Building whisper.cpp with 4 vCPUs..."
+            git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper-src
+            cd /tmp/whisper-src
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+            cmake --build build --config Release -j 4
+            if [ -f "build/bin/whisper-cli" ]; then
+              cp build/bin/whisper-cli /tmp/whisper-bin/whisper-cli
+            elif [ -f "build/bin/main" ]; then
+              cp build/bin/main /tmp/whisper-bin/whisper-cli
+            fi
+            chmod +x /tmp/whisper-bin/whisper-cli
+            rm -rf /tmp/whisper-src
+          else
+            echo "✅ Restored whisper-cli from cache!"
+            chmod +x /tmp/whisper-bin/whisper-cli
+          fi
+
+          if [ ! -f "/tmp/whisper-bin/ggml-small.bin" ]; then
+            echo "📥 Downloading Whisper ggml-small.bin model (466 MB at 10 Gbps)..."
+            curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin -o /tmp/whisper-bin/ggml-small.bin
+          else
+            echo "✅ Restored ggml-small.bin from cache!"
+          fi
+
+      - name: 🔥 Launch Ares Cloud Beast Daemon
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PAT_TOKEN: ${{ secrets.ARES_PAT || github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WHISPER_CPP_BIN: /tmp/whisper-bin/whisper-cli
+          WHISPER_MODEL_PATH: /tmp/whisper-bin/ggml-small.bin
+        run: |
+          if [ -n "${{ secrets.YT_COOKIES }}" ]; then
+            echo "${{ secrets.YT_COOKIES }}" > cookies.txt
+          fi
+          node worker.js
