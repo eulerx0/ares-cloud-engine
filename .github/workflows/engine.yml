@@ -78,11 +78,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PAT_TOKEN: ${{ secrets.ARES_PAT || github.token }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           WHISPER_CPP_BIN: /tmp/whisper-bin/whisper-cli
           WHISPER_MODEL_PATH: /tmp/whisper-bin/ggml-small.bin
-        run: |
-          if [ -n "${{ secrets.YT_COOKIES }}" ]; then
-            echo "${{ secrets.YT_COOKIES }}" > cookies.txt
-          fi
-          node worker.js
+        run: node worker.js

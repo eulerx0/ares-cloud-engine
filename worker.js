@@ -201,7 +201,7 @@ async function executeJob(job, assets) {
                 result = await processSongBurn(job, localInPath, onProgress);
                 break;
             case 'mv':
-                result = await processMvRemix(job, localInPath, onProgress);
+                result = await processMvRemix(job, localInPath, localAudioPath, onProgress);
                 break;
             case 'slow':
             case 'sped':
@@ -287,6 +287,10 @@ async function respawnNextGeneration() {
 
 async function mainLoop() {
     console.log('⚡ Ares Cloud Beast v2.0 initializing...');
+    if (process.env.YT_COOKIES && process.env.YT_COOKIES.trim().length > 20) {
+        fs.writeFileSync(path.join(process.cwd(), 'cookies.txt'), process.env.YT_COOKIES, 'utf8');
+        console.log('🍪 Loaded YouTube cookies.txt from encrypted secret.');
+    }
     await ensureBusRelease();
 
     busState.beast.status = 'awake';
