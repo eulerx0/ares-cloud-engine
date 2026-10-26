@@ -35,22 +35,44 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/whisper-bin
-          key: ares-whisper-cpp-small-v1
+          key: ares-whisper-small-v3-${{ runner.os }}
 
-      - name: 🛠️ Install FFmpeg, yt-dlp & Whisper Engine
+      - name: 🛠️ Setup High-Performance FFmpeg, yt-dlp & Subtitles
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg cmake build-essential curl ca-certificates fonts-noto-core fonts-noto-color-emoji fonts-dejavu-core
+          set -e
+          echo "=== 1. Checking / Installing FFmpeg Suite ==="
+          if ! command -v ffmpeg &> /dev/null || ! command -v ffprobe &> /dev/null; then
+            echo "📥 Downloading static high-performance FFmpeg suite from GitHub..."
+            curl -fSL --retry 3 --connect-timeout 20 "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o /tmp/ffmpeg.tar.xz
+            mkdir -p /tmp/ffmpeg-extracted
+            tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-extracted --strip-components=1
+            sudo cp /tmp/ffmpeg-extracted/bin/ffmpeg /usr/local/bin/ffmpeg
+            sudo cp /tmp/ffmpeg-extracted/bin/ffprobe /usr/local/bin/ffprobe
+            sudo chmod a+rx /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+            rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-extracted
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
-          # Install latest yt-dlp binary
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          echo "=== 2. Installing Latest yt-dlp ==="
+          sudo curl -fSL --retry 3 --connect-timeout 15 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
           yt-dlp --version
 
-          # Build whisper.cpp and download ggml-small.bin if not cached
+          echo "=== 3. Ensuring DejaVu Fonts for ASS Subtitles ==="
+          sudo mkdir -p /usr/share/fonts/truetype/dejavu
+          if [ ! -f "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" ]; then
+            echo "📥 Downloading DejaVuSans.ttf..."
+            sudo curl -fSL --retry 3 --connect-timeout 15 "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/resources/DejaVuSans.ttf" -o /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+            sudo fc-cache -f || true
+          fi
+
+      - name: 🧠 Prepare Whisper AI Engine (Cache-Accelerated)
+        run: |
+          set -e
           mkdir -p /tmp/whisper-bin
           if [ ! -f "/tmp/whisper-bin/whisper-cli" ]; then
-            echo "🔨 Building whisper.cpp with 4 vCPUs..."
+            echo "🔨 Compiling whisper.cpp with 4 vCPUs..."
             git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper-src
             cd /tmp/whisper-src
             cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
@@ -62,14 +84,16 @@ jobs:
             fi
             chmod +x /tmp/whisper-bin/whisper-cli
             rm -rf /tmp/whisper-src
+            echo "✅ whisper-cli compiled successfully!"
           else
             echo "✅ Restored whisper-cli from cache!"
             chmod +x /tmp/whisper-bin/whisper-cli
           fi
 
           if [ ! -f "/tmp/whisper-bin/ggml-small.bin" ]; then
-            echo "📥 Downloading Whisper ggml-small.bin model (466 MB at 10 Gbps)..."
-            curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin -o /tmp/whisper-bin/ggml-small.bin
+            echo "📥 Downloading Whisper ggml-small.bin model (466 MB)..."
+            curl -fSL --retry 3 --connect-timeout 25 -C - "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" -o /tmp/whisper-bin/ggml-small.bin
+            echo "✅ Model downloaded successfully!"
           else
             echo "✅ Restored ggml-small.bin from cache!"
           fi
