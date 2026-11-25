@@ -8,6 +8,10 @@ on:
         required: false
         default: 'cli-wakeup'
 
+concurrency:
+  group: ares-beast-engine
+  cancel-in-progress: false
+
 permissions:
   contents: write
   actions: write
@@ -20,50 +24,98 @@ jobs:
 
     steps:
       - name: 📥 Checkout Engine Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: 🟢 Setup Node.js 20
-        uses: actions/setup-node@v4
+      - name: 🟢 Setup Node.js 22 LTS
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 📦 Install Node Dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
+
+      - name: ⚡ Restore Media Tools Cache (FFmpeg, yt-dlp, Fonts)
+        id: cache-tools
+        uses: actions/cache@v6
+        with:
+          path: /tmp/tools-bin
+          key: ares-tools-v2-${{ runner.os }}
 
       - name: ⚡ Restore Whisper.cpp & AI Model Cache
         id: cache-whisper
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/whisper-bin
           key: ares-whisper-small-v3-${{ runner.os }}
 
-      - name: 🛠️ Setup High-Performance FFmpeg, yt-dlp & Subtitles
+      - name: 🛠️ Setup Resilient FFmpeg, yt-dlp & Fonts
         run: |
           set -e
-          echo "=== 1. Checking / Installing FFmpeg Suite ==="
-          if ! command -v ffmpeg &> /dev/null || ! command -v ffprobe &> /dev/null; then
-            echo "📥 Downloading static high-performance FFmpeg suite from GitHub..."
-            curl -fSL --retry 3 --connect-timeout 20 "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o /tmp/ffmpeg.tar.xz
-            mkdir -p /tmp/ffmpeg-extracted
-            tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-extracted --strip-components=1
-            sudo cp /tmp/ffmpeg-extracted/bin/ffmpeg /usr/local/bin/ffmpeg
-            sudo cp /tmp/ffmpeg-extracted/bin/ffprobe /usr/local/bin/ffprobe
-            sudo chmod a+rx /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
-            rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-extracted
+          mkdir -p /tmp/tools-bin
+
+          echo "=== 1. FFmpeg & FFprobe Suite ==="
+          if [ ! -x "/tmp/tools-bin/ffmpeg" ] || [ ! -x "/tmp/tools-bin/ffprobe" ]; then
+            echo "📥 Downloading high-performance static FFmpeg..."
+            if curl -fSL --retry 2 --connect-timeout 15 --max-time 90 \
+              "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" \
+              -o /tmp/ffmpeg.tar.xz; then
+              mkdir -p /tmp/ffmpeg-extracted
+              tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-extracted --strip-components=1
+              cp /tmp/ffmpeg-extracted/bin/ffmpeg /tmp/tools-bin/ffmpeg
+              cp /tmp/ffmpeg-extracted/bin/ffprobe /tmp/tools-bin/ffprobe
+              chmod +x /tmp/tools-bin/ffmpeg /tmp/tools-bin/ffprobe
+              rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-extracted
+            else
+              echo "⚠️ BtbN download failed — falling back to apt/system FFmpeg..."
+              rm -f /tmp/ffmpeg.tar.xz
+              if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+                sudo apt-get update -qq
+                sudo apt-get install -y -qq ffmpeg
+              fi
+              cp "$(command -v ffmpeg)" /tmp/tools-bin/ffmpeg
+              cp "$(command -v ffprobe)" /tmp/tools-bin/ffprobe
+              chmod +x /tmp/tools-bin/ffmpeg /tmp/tools-bin/ffprobe
+            fi
+          else
+            echo "✅ Restored FFmpeg & FFprobe from cache!"
           fi
+          sudo cp /tmp/tools-bin/ffmpeg /usr/local/bin/ffmpeg
+          sudo cp /tmp/tools-bin/ffprobe /usr/local/bin/ffprobe
+          sudo chmod a+rx /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
 
-          echo "=== 2. Installing Latest yt-dlp ==="
-          sudo curl -fSL --retry 3 --connect-timeout 15 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o /usr/local/bin/yt-dlp
+          echo "=== 2. yt-dlp (Latest with Cache Fallback) ==="
+          if curl -fSL --retry 2 --connect-timeout 15 --max-time 45 \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
+            -o /tmp/tools-bin/yt-dlp.new; then
+            mv /tmp/tools-bin/yt-dlp.new /tmp/tools-bin/yt-dlp
+            chmod +x /tmp/tools-bin/yt-dlp
+          elif [ ! -x "/tmp/tools-bin/yt-dlp" ]; then
+            echo "⚠️ yt-dlp direct download failed — installing via pip..."
+            python3 -m pip install -q yt-dlp
+            cp "$(command -v yt-dlp)" /tmp/tools-bin/yt-dlp
+            chmod +x /tmp/tools-bin/yt-dlp
+          else
+            echo "✅ Using cached yt-dlp binary!"
+          fi
+          sudo cp /tmp/tools-bin/yt-dlp /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
           yt-dlp --version
 
-          echo "=== 3. Ensuring DejaVu Fonts for ASS Subtitles ==="
+          echo "=== 3. DejaVu Fonts for ASS Subtitles ==="
           sudo mkdir -p /usr/share/fonts/truetype/dejavu
-          if [ ! -f "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" ]; then
-            echo "📥 Downloading DejaVuSans.ttf..."
-            sudo curl -fSL --retry 3 --connect-timeout 15 "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/resources/DejaVuSans.ttf" -o /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+          if [ ! -f "/tmp/tools-bin/DejaVuSans.ttf" ]; then
+            if ! curl -fSL --retry 2 --connect-timeout 15 --max-time 30 \
+              "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/resources/DejaVuSans.ttf" \
+              -o /tmp/tools-bin/DejaVuSans.ttf; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core
+              FONT_SRC="$(find /usr/share/fonts -name 'DejaVuSans.ttf' | head -n 1)"
+              [ -n "$FONT_SRC" ] && cp "$FONT_SRC" /tmp/tools-bin/DejaVuSans.ttf
+            fi
+          fi
+          if [ -f "/tmp/tools-bin/DejaVuSans.ttf" ]; then
+            sudo cp /tmp/tools-bin/DejaVuSans.ttf /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
             sudo fc-cache -f || true
           fi
 
@@ -92,7 +144,9 @@ jobs:
 
           if [ ! -f "/tmp/whisper-bin/ggml-small.bin" ]; then
             echo "📥 Downloading Whisper ggml-small.bin model (466 MB)..."
-            curl -fSL --retry 3 --connect-timeout 25 -C - "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" -o /tmp/whisper-bin/ggml-small.bin
+            curl -fSL --retry 3 --connect-timeout 25 -C - \
+              "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" \
+              -o /tmp/whisper-bin/ggml-small.bin
             echo "✅ Model downloaded successfully!"
           else
             echo "✅ Restored ggml-small.bin from cache!"
@@ -102,8 +156,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PAT_TOKEN: ${{ secrets.ARES_PAT || github.token }}
+          ARES_CRYPTO_KEY: ${{ secrets.ARES_CRYPTO_KEY }}
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          WHISPER_BIN: /tmp/whisper-bin/whisper-cli
           WHISPER_CPP_BIN: /tmp/whisper-bin/whisper-cli
+          WHISPER_MODEL: /tmp/whisper-bin/ggml-small.bin
           WHISPER_MODEL_PATH: /tmp/whisper-bin/ggml-small.bin
+          NODE_OPTIONS: --max-old-space-size=4096
         run: node worker.js
