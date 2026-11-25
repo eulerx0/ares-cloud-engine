@@ -11,7 +11,8 @@ const {
     processRotate,
     processMp3,
     processTheme,
-    processAudioMerge
+    processAudioMerge,
+    processSpeedtest
 } = require('./lib/processors');
 const {
     normalizeMasterKey,
@@ -313,6 +314,9 @@ async function executeJob(rawJob, assets) {
             case 'setaudio':
             case 'mixaudio':
                 result = await processAudioMerge(job, localInPath, localAudioPath, onProgress);
+                break;
+            case 'speedtest':
+                result = await processSpeedtest(job, onProgress);
                 break;
             default:
                 throw new Error(`Unknown action: ${job.action}`);
